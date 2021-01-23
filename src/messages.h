@@ -39,15 +39,19 @@ public:
     EncapsulatedObjectRef(EncapsulatedObjectRef &&rhs) :
         object(rhs.object), direction(rhs.direction) {}
 
-    virtual QJsonObject *operator->() { return &object; }
-    virtual QJsonObject *operator*() { return &object; }
-    virtual QJsonValueRef operator[](const FieldNameType &t) { return this->object[t]; }
+    virtual ~EncapsulatedObjectRef() {}
 
-    virtual operator QJsonObject &() { return this->object; }
+    virtual QJsonObject *operator->() { return &ref(); }
+    virtual QJsonObject *operator*() { return &ref(); }
+    virtual QJsonValueRef operator[](const FieldNameType &t) { return this->ref()[t]; }
+
+    virtual operator QJsonObject &() { return this->ref(); }
 
     virtual QJsonObject &ref() { return this->object; }
 
-    virtual ~EncapsulatedObjectRef() {}
+    virtual std::string toStdString() {
+        return QJsonDocument(ref()).toJson(QJsonDocument::Compact).toStdString();
+    }
 };
 
 
@@ -62,7 +66,7 @@ public:
     EncapsulatedChildObjectRef(QJsonObject &parent, const FieldNameType &field, const storage_direction dir) :
         EncapsulatedObjectRef(parent, dir),
         field(field),
-        child((dir==storage_direction::WRITE)? parent[field].toObject() : QJsonObject{})
+        child((dir==storage_direction::READ)? parent[field].toObject() : QJsonObject{})
     {}
 
     EncapsulatedChildObjectRef(EncapsulatedChildObjectRef &&rhs) :
@@ -70,12 +74,6 @@ public:
         field(std::move(rhs.field)),
         child(std::move(rhs.child))
     {}
-
-    QJsonObject *operator->() { return &child; }
-    QJsonObject *operator*() { return &child; }
-    QJsonValueRef operator[](const FieldNameType &t) { return this->child[t]; }
-
-    operator QJsonObject &() { return this->child; }
 
     QJsonObject &ref() { return this->child; }
 

@@ -48,10 +48,12 @@ void DidCloseTextDocument::process(Connection *conn, project *proj) {
 void TextDocumentHover::process(Connection *conn, project *proj) {
     UNUSED(proj);
     // Called when a document is opened
-    std::cout << "Hover over : " << this->textDocument.getPath() << "\n\n";
+    std::cout << "Hover over : " << this->textDocument.getPath() << this->position.line << ":"<< this->position.character << "\n";
 
     HoverResponse hover;
-    hover.contents = "Hello VSCode! I Am Alive";
+    hover.contents = "Hello VSCode! I Am Alive, you are at line " + std::to_string(this->position.line);
+    hover.range.start = this->position;
+    hover.range.end = this->position;
 
     conn->send(hover);
 }

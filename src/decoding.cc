@@ -119,6 +119,7 @@ void ConnectionHandler::handle_message(std::istream &msg, size_t size, Connectio
 void ConnectionHandler::register_messages() {
     std::cout << "Method mapping:\n";
 
+    // This has to be a macro for the "symbol to string conversion" lovelyness
     #define MAP(method, messagetype) do {\
         this->typemap.emplace(method, [](decode_env &env)->std::unique_ptr<RequestMessage> { \
             static_assert(std::is_base_of<RequestMessage, messagetype>::value); \
