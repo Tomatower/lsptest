@@ -5,16 +5,17 @@
 
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QJsonArray>
 
 #include <istream>
 #include <memory>
 #include <string>
 #include <iostream>
 
-
 class Connection;
 struct decode_env;
 class ResponseMessage;
+class RequestMessage;
 
 enum class storage_direction {
     READ, WRITE
@@ -95,6 +96,7 @@ struct decode_env {
     decode_env(std::ostream &stream, storage_direction dir=storage_direction::WRITE);
 
     void store(std::ostream &stream, ResponseMessage &);
+    void store(std::ostream &stream, RequestMessage &);
 
     template<typename value_type>
     bool declare_field(JSONObject &parent, value_type &dst, const FieldNameType &field) {
@@ -115,7 +117,7 @@ struct decode_env {
                     dst = it->toString();
                 } else {
                     std::cerr << "Trying to decode unknown type\n";
-                    printf("%i", dst);
+                    printf("%i<- If this is part of your error message, you have messed up something in the decoding if your message - maybe you have forgotton to declare it as MAKE_DECODEABLE?", dst);
                     //static_assert(std::is_same<value_type, bool>::value);
                 }
                 return true;
@@ -132,18 +134,63 @@ struct decode_env {
         }
     }
 
-    template <typename optional_type>
-    bool declare_field_optional(JSONObject &object, std::optional<optional_type> &target, const FieldNameType &field) {
-        if (dir == storage_direction::READ) {
-            optional_type t;
-            declare_field(object, t, field);
-            target = t;
-        } else {
-            if (target) {
-                optional_type t = target.value();
-                declare_field(object, t, field);
+    template <typename value_type>
+    bool declare_field_optional(JSONObject &object, OptionalType<value_type> &target, const FieldNameType &field) {
+        bool retval = false;
+        if (this->dir == storage_direction::READ) {
+            if (object.ref().find(field) != object.ref().end()) {
+                value_type t;
+                retval = declare_field(object, t, field);
+                target = t;
             }
+        } else if (target) {
+            // Only store the field into the json if the optional is set   
+            value_type t = target.value();
+            retval = declare_field(object, t, field);
+        } else {
+            return false;
         }
+        return retval;
+    }
+
+    template <typename value_type>
+    bool declare_field_array(JSONObject &parent, std::vector<value_type> &target, const FieldNameType &field) {
+        if (this->dir == storage_direction::READ) {
+            target.clear();
+            auto field_it = parent->find(field);
+            if (field_it == parent->end()) {
+                return false;
+            }
+            if (!field_it->isArray()) {
+                // TODO How can I throw a Error Result here?
+                assert(field_it->isArray());
+                return false;
+            }
+            QJsonArray array = field_it->toArray();
+            target.reserve(array.size());
+            for (const auto array_it : array) {
+                value_type t;
+                {
+                    QJsonObject obj = array_it.toObject();
+                    JSONObject wrapper(obj, this->dir);
+                    declare_field(wrapper, t, "");
+                }
+                target.emplace_back(std::move(t));
+            } 
+            if (array.empty()) return false;
+        } else {
+            QJsonArray array;
+            for (auto &it : target) {
+                QJsonObject dst; 
+                {
+                    JSONObject wrapper(dst, this->dir);
+                    declare_field(wrapper, it, "");
+                }
+                array.append(dst);
+            }
+            parent[field] = array;
+        }
+        return true;
     }
 
     template<typename value_type>
@@ -173,27 +220,33 @@ struct MESSAGETYPE
 
 
 
-
 struct RequestMessage {
-
+    RequestMessage() {
+        this->id.type = RequestId::AUTO_INCREMENT;
+    }
     RequestId id;
     std::string method;
 
-    virtual void process(Connection *conn, project *project) = 0;
+    virtual void process(Connection *conn, project *project, const RequestId &id) = 0;
     virtual void decode(decode_env &env, JSONObject &object, const FieldNameType &field) = 0;
 
     virtual ~RequestMessage() {}
 };
+template<>
+bool decode_env::declare_field(JSONObject &object, RequestMessage &target, const FieldNameType &field);
 
 // Base Class for Results
 MESSAGE_CLASS(ResponseResult) {
-    MAKE_DECODEABLE;
+    //MAKE_DECODEABLE;
+    virtual void decode(decode_env &env, JSONObject &object, const FieldNameType &field) = 0;
 
     virtual ~ResponseResult() {}
 };
 
+
 MESSAGE_CLASS(ResponseError) {
     MAKE_DECODEABLE;
+    ResponseError() {}
     ResponseError(ErrorCode err, const std::string &msg) :
         code(err), message(msg) {}
 
@@ -203,22 +256,40 @@ MESSAGE_CLASS(ResponseError) {
     virtual ~ResponseError() {}
 };
 
+class ResponseMessage;
+template<>
+bool decode_env::declare_field(JSONObject &object, ResponseMessage &target, const FieldNameType &field);
 
 MESSAGE_CLASS(ResponseMessage) {
     MAKE_DECODEABLE;
-    RequestId id;
-    ResponseResult *result = nullptr;
-    ResponseError *error = nullptr;
+    
+    // Ctor which takes ownership of the result
+    ResponseMessage(ResponseResult *_r) : result(_r), delete_result(true) {}
+    // Ctor which does NOT take take ownership of result
+    ResponseMessage(ResponseResult &_r) : result(&_r), delete_result(false) {}    
+    // An incoming message can not directly be mapped to a type - so we store it as JSON
+    ResponseMessage(const QJsonObject &obj) : result(nullptr), raw_result(obj), use_result(false), delete_result(false) {}
 
-    virtual ~ResponseMessage() {}
+    RequestId id;
+    ResponseResult *result; 
+    QJsonObject raw_result;
+    OptionalType<ResponseError> error;
+
+    const bool use_result = true;
+    const bool delete_result;
+    virtual ~ResponseMessage() {
+        if (delete_result) delete(result);
+    }
+
 };
+
 
 ///////////////////////////////////////////////////////////
 // Begin Interaction Messages
 ///////////////////////////////////////////////////////////
 MESSAGE_CLASS(InitializeRequest) : public RequestMessage {
     MAKE_DECODEABLE;
-    virtual void process(Connection *, project *);
+    virtual void process(Connection *, project *, const RequestId &id);
 
     std::string rootUri;
     std::string rootPath;
@@ -242,19 +313,19 @@ MESSAGE_CLASS(InitializeResult) : public ResponseResult {
 
 MESSAGE_CLASS(InitializedNotifiy) : public RequestMessage {
     MAKE_DECODEABLE;
-    virtual void process(Connection *, project *){};
+    virtual void process(Connection *, project *, const RequestId &){};
 };
 
 MESSAGE_CLASS(ShutdownRequest) : public RequestMessage {
     MAKE_DECODEABLE;
 
-    virtual void process(Connection *, project *);
+    virtual void process(Connection *, project *, const RequestId &id);
 };
 
 MESSAGE_CLASS(ExitRequest) : public RequestMessage {
     MAKE_DECODEABLE;
 
-    virtual void process(Connection *, project *);
+    virtual void process(Connection *, project *, const RequestId &id);
 };
 
 
@@ -265,7 +336,7 @@ MESSAGE_CLASS(TextDocumentPositionParams) : public RequestMessage {
     MAKE_DECODEABLE;
 
     Position position;
-    DocumentUri textDocument;
+    TextDocumentIdentifier textDocument;
 };
 
 /// capability: textDocumentSync
@@ -273,7 +344,7 @@ MESSAGE_CLASS(DidOpenTextDocument) : public RequestMessage {
     MAKE_DECODEABLE;
 
     TextDocumentItem textDocument;
-    virtual void process(Connection *, project *);
+    virtual void process(Connection *, project *, const RequestId &id);
 };
 
 MESSAGE_CLASS(DidChangeTextDocument) : public RequestMessage {
@@ -284,21 +355,21 @@ MESSAGE_CLASS(DidChangeTextDocument) : public RequestMessage {
     // Todo handle lists?
     TextDocumentContentChangeEvent contentChanges;
 
-    virtual void process(Connection *, project *);
+    virtual void process(Connection *, project *, const RequestId &id);
 };
 
 MESSAGE_CLASS(DidCloseTextDocument) : public RequestMessage {
     MAKE_DECODEABLE;
 
-    TextDocumentItem textDocument;
-    virtual void process(Connection *, project *);
+    TextDocumentIdentifier textDocument;
+    virtual void process(Connection *, project *, const RequestId &id);
 };
 
 /// capability: hoverProvider
 MESSAGE_CLASS(TextDocumentHover) : public TextDocumentPositionParams {
     MAKE_DECODEABLE;
 
-    virtual void process(Connection *, project *);
+    virtual void process(Connection *, project *, const RequestId &id);
 };
 
 MESSAGE_CLASS(HoverResponse) : public ResponseResult {
@@ -307,6 +378,47 @@ MESSAGE_CLASS(HoverResponse) : public ResponseResult {
     std::string contents;
     lsRange range;
 };
+
+MESSAGE_CLASS(Diagnostic) {
+    MAKE_DECODEABLE;
+
+    lsRange range;
+    int severity;
+    std::string message;
+    // And many more...
+};
+
+MESSAGE_CLASS(PublishDiagnosticsParams) : RequestMessage {
+    MAKE_DECODEABLE;
+
+    DocumentUri uri;
+    OptionalType<int> version;
+    std::vector<Diagnostic> diagnostics;
+};
+
+// client capability: window.showDocument
+MESSAGE_CLASS(ShowDocumentParams) : public RequestMessage {
+    MAKE_DECODEABLE;
+
+    DocumentUri uri;
+    OptionalType<bool> external;
+    OptionalType<bool> takeFocus;
+    OptionalType<lsRange> selection;
+
+    virtual void process(Connection *, project *, const RequestId &){ assert(false); };
+};
+
+///////////////////////////////////////////////////////////
+// OpenSCAD extensions
+///////////////////////////////////////////////////////////
+MESSAGE_CLASS(OpenSCADRender) : public RequestMessage {
+    MAKE_DECODEABLE;
+    DocumentUri uri;
+
+    // load (if needed) and start the rendering of the given document
+    virtual void process(Connection *, project *, const RequestId &id);
+};
+
 
 #undef MESSAGE_CLASS
 #undef MAKE_DECODEABLE

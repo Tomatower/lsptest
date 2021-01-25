@@ -56,6 +56,7 @@ target_sources(lsptest PRIVATE
     src/connection.cc
     src/connection_handler.cc
     src/decoding.cc
+    src/lsp.cc
 )
 
 #find_program(iwyu_path NAMES include-what-you-use iwyu)

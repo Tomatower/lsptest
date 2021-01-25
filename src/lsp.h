@@ -1,15 +1,28 @@
-// Copyright 2017-2018 ccls Authors
+// Inspired by ccls Authors
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
 #include <chrono>
-#include <optional>
 #include <vector>
 #include <string>
 
+
+// 201402L is C++14
+#if __cplusplus > 201402L 
+    #include <optional>
+    template<typename _T>
+    using OptionalType = std::optional<_T>;
+#else
+    // Fallback to boost optional for older C++ standards
+    #include <boost/optional.hpp>
+    template<typename _T>
+    using OptionalType = boost::optional<_T>;
+#endif
+
+
 struct RequestId {
-    enum { UNSET, STRING, INT } type = UNSET;
+    enum { UNSET, STRING, INT, AUTO_INCREMENT } type = UNSET;
     std::string value_str;
     int value_int;
 
@@ -20,6 +33,8 @@ struct RequestId {
             return value_str;
         case INT:
             return std::to_string(value_int);
+        case AUTO_INCREMENT:
+            return "<AUTOINCREMENT-UNSET>";
         case UNSET:
             return "<UNSET>";
         }
@@ -49,8 +64,8 @@ struct DocumentUri {
   bool operator==(const DocumentUri &o) const { return raw_uri == o.raw_uri; }
   bool operator<(const DocumentUri &o) const { return raw_uri < o.raw_uri; }
 
-  void setPath(const std::string &path) { raw_uri = path; };
-  std::string getPath() const { return raw_uri; }
+  void setPath(const std::string &path);
+  std::string getPath() const;
 
   std::string raw_uri;
 };
@@ -151,7 +166,7 @@ struct SymbolInformation {
   std::string name;
   SymbolKind kind;
   Location location;
-  std::optional<std::string> containerName;
+  OptionalType<std::string> containerName;
 };
 
 struct TextDocumentIdentifier {
@@ -161,7 +176,7 @@ struct TextDocumentIdentifier {
 struct VersionedTextDocumentIdentifier {
   DocumentUri uri;
   // The version number of this document.  number | null
-  std::optional<int> version;
+  OptionalType<int> version;
 };
 
 struct TextEdit {
@@ -178,9 +193,9 @@ struct TextDocumentItem {
 
 struct TextDocumentContentChangeEvent {
   // The range of the document that changed.
-  std::optional<lsRange> range;
+  OptionalType<lsRange> range;
   // The length of the range that got replaced.
-  std::optional<int> rangeLength;
+  OptionalType<int> rangeLength;
   // The new text of the range/document.
   std::string text;
 };
@@ -192,9 +207,9 @@ struct TextDocumentDidChangeParam {
 
 struct WorkDoneProgress {
   std::string kind;
-  std::optional<std::string> title;
-  std::optional<std::string> message;
-  std::optional<int> percentage;
+  OptionalType<std::string> title;
+  OptionalType<std::string> message;
+  OptionalType<int> percentage;
 };
 struct WorkDoneProgressParam {
   std::string token;
