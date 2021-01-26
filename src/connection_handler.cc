@@ -43,7 +43,7 @@ void ConnectionHandler::handle_message(std::istream &msg, size_t size, Connectio
         std::cout << "Handling Message [id " << id.value()  << "] with method " << method << "\n";
         auto it = this->typemap.find(method);
         if (it == this->typemap.end()) {
-            std::cerr << "invalid method requested " << method << "\n";
+            std::cerr << "Not defined method requested " << method << "\n";
             conn->send(ResponseError(ErrorCode::MethodNotFound, std::string("Method [") + method + "] not implemented"), id);
             return;
         } else {

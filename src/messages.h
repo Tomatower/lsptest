@@ -264,9 +264,9 @@ MESSAGE_CLASS(ResponseMessage) {
     MAKE_DECODEABLE;
     
     // Ctor which takes ownership of the result
-    ResponseMessage(ResponseResult *_r) : result(_r), delete_result(true) {}
+    ResponseMessage(ResponseResult *_r) : result(_r), use_result(_r == nullptr), delete_result(_r != nullptr) {}
     // Ctor which does NOT take take ownership of result
-    ResponseMessage(ResponseResult &_r) : result(&_r), delete_result(false) {}    
+    ResponseMessage(ResponseResult &_r) : result(&_r), use_result(true), delete_result(false) {}    
     // An incoming message can not directly be mapped to a type - so we store it as JSON
     ResponseMessage(const QJsonObject &obj) : result(nullptr), raw_result(obj), use_result(false), delete_result(false) {}
 

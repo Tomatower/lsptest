@@ -24,7 +24,7 @@
 struct RequestId {
     enum { UNSET, STRING, INT, AUTO_INCREMENT } type = UNSET;
     std::string value_str;
-    int value_int;
+    int value_int = 0;
 
     bool is_set() { return type != UNSET; }
     std::string value() {

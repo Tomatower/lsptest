@@ -10,6 +10,9 @@ void InitializeRequest::process(Connection *conn, project *proj, const RequestId
     UNUSED(proj);
     InitializeResult msg;
     std::cout << "Processing InitializeRequest\n";
+    // TODO fill in the initialize Result (Capabilities are automatically encoded)
+
+    // TODO initialize the project from the initalization parameters
 
     conn->send(msg, id);
 }
@@ -17,11 +20,14 @@ void InitializeRequest::process(Connection *conn, project *proj, const RequestId
 void ShutdownRequest::process(Connection *conn, project *proj, const RequestId &id) {
     UNUSED(proj);
     UNUSED(conn);
-    // TODO
+    UNUSED(id);
+    // TODO : Shutdown response
 }
 
 void ExitRequest::process(Connection *conn, project *proj, const RequestId &id) {
     UNUSED(proj);
+    UNUSED(id);
+    // TODO do i need a shutdown response?
     conn->socket().close();
 }
 
