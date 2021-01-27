@@ -2,16 +2,49 @@
 #include "connection.h"
 #include "messages.h"
 
+ConnectionHandler::ConnectionHandler(QObject *parent, uint16_t port) :
+        QObject(parent)
+{
+    register_messages();
+
+    this->server.listen(QHostAddress::LocalHost, port);
+    connect(&this->server, SIGNAL(newConnection()),
+            this, SLOT(onNewConnection()));
+
+}
+
+ConnectionHandler::~ConnectionHandler() {
+
+}
+
+void ConnectionHandler::onNewConnection() {
+    QTcpSocket *clientSocket = this->server.nextPendingConnection();
+    connect(clientSocket, SIGNAL(stateChanged(QAbstractSocket::SocketState)),
+            this, SLOT(onSocketStateChanged(QAbstractSocket::SocketState)));
+
+    this->connections.emplace_back(std::make_unique<Connection>(this, clientSocket));
+}
+
+void ConnectionHandler::onSocketStateChanged(QAbstractSocket::SocketState socketState) {
+    if (socketState == QAbstractSocket::UnconnectedState)
+    {
+        this->connections.remove_if([](const std::unique_ptr<Connection> &c) {
+            return c->is_done();
+        });
+    }
+}
+
+
 template <>
 bool decode_env::declare_field(JSONObject &object, RequestId &target, const FieldNameType &field);
 
-void ConnectionHandler::handle_message(std::istream &msg, size_t size, Connection *conn) {
+void ConnectionHandler::handle_message(const QByteArray &buffer, Connection *conn) {
     // Convert to json and construct the message from it
     RequestId id;
     std::string method;
 
     try {
-        decode_env env(msg, size);
+        decode_env env(buffer, storage_direction::READ);
         auto root = env.document.object();
         {
             EncapsulatedObjectRef wrapper(root, storage_direction::READ);
@@ -22,8 +55,8 @@ void ConnectionHandler::handle_message(std::istream &msg, size_t size, Connectio
                 // when the method is empty, this might be a hint for a response mesasge?
                 if (wrapper.ref().find("result") != wrapper.ref().end() ||
                         wrapper.ref().find("error") != wrapper.ref().end()) {
-                    
-                    
+
+
                     ResponseMessage msg(wrapper.ref());
                     msg.id = id;
                     {

@@ -218,13 +218,13 @@ bool decode_env::declare_field(JSONObject &object, ResponseMessage &target, cons
     declare_field(object, target.id, "id");
 
     declare_field_optional(object, target.error, "error");
-    
+
     if (this->dir == storage_direction::READ) {
         //target.use_result = false;
         //target.raw_result = object.ref(); // (already done during cosntruction)
     } else {
-        if (target.use_result) {
-            assert(target.result);
+        if (target.use_result && target.result) {
+//            assert(target.result);
             auto child = start_object(object, "result");
             target.result->decode(*this, child, "result");
         }
@@ -233,7 +233,7 @@ bool decode_env::declare_field(JSONObject &object, ResponseMessage &target, cons
     if (!target.error && !(target.result || !target.use_result)) {
         std::cerr << "Having a message with neither error nor result\n";
     }
-    
+
     return true;
 }
 
@@ -413,15 +413,11 @@ void ConnectionHandler::register_messages() {
 }
 
 
-decode_env::decode_env(std::istream &stream, const size_t size, storage_direction dir) :
+decode_env::decode_env(const QByteArray &buffer, storage_direction dir) :
         dir(dir)
 {
-    QByteArray streamdata;
-    streamdata.resize(size);
-    stream.read(streamdata.data(), size);
-
     QJsonParseError err;
-    this->document = QJsonDocument::fromJson(streamdata);
+    this->document = QJsonDocument::fromJson(buffer, &err);
 
     if (this->document.isNull()) {
         ResponseError msg(ErrorCode::InvalidRequest,
@@ -431,28 +427,28 @@ decode_env::decode_env(std::istream &stream, const size_t size, storage_directio
 }
 
 
-decode_env::decode_env(std::ostream &stream, storage_direction dir) :
+decode_env::decode_env(storage_direction dir) :
         dir(dir)
 {
-    UNUSED(stream);
+    assert(dir == storage_direction::WRITE);
 }
 
-void decode_env::store(std::ostream &stream, ResponseMessage &msg) {
+void decode_env::store(QByteArray *buffer, ResponseMessage &msg) {
     QJsonObject root;
     {
         EncapsulatedObjectRef wrapper(root, storage_direction::WRITE);
         this->declare_field(wrapper, msg, "");
     }
     this->document.setObject(root);
-    stream << this->document.toJson(QJsonDocument::JsonFormat::Compact).toStdString();
+    buffer->append(this->document.toJson(QJsonDocument::JsonFormat::Compact));
 }
 
-void decode_env::store(std::ostream &stream, RequestMessage &msg) {
+void decode_env::store(QByteArray *buffer, RequestMessage &msg) {
     QJsonObject root;
     {
         EncapsulatedObjectRef wrapper(root, storage_direction::WRITE);
         this->declare_field(wrapper, msg, "");
     }
     this->document.setObject(root);
-    stream << this->document.toJson(QJsonDocument::JsonFormat::Compact).toStdString();
+    buffer->append(this->document.toJson(QJsonDocument::JsonFormat::Compact));
 }

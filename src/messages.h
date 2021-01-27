@@ -6,6 +6,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonArray>
+#include <QByteArray>
 
 #include <istream>
 #include <memory>
@@ -92,11 +93,11 @@ struct decode_env {
     const storage_direction dir;
     QJsonDocument document;
 
-    decode_env(std::istream &stream, size_t size, storage_direction dir=storage_direction::READ);
-    decode_env(std::ostream &stream, storage_direction dir=storage_direction::WRITE);
+    decode_env(const QByteArray &, storage_direction dir=storage_direction::READ);
+    decode_env(storage_direction dir);
 
-    void store(std::ostream &stream, ResponseMessage &);
-    void store(std::ostream &stream, RequestMessage &);
+    void store(QByteArray *, ResponseMessage &);
+    void store(QByteArray *, RequestMessage &);
 
     template<typename value_type>
     bool declare_field(JSONObject &parent, value_type &dst, const FieldNameType &field) {
@@ -144,7 +145,7 @@ struct decode_env {
                 target = t;
             }
         } else if (target) {
-            // Only store the field into the json if the optional is set   
+            // Only store the field into the json if the optional is set
             value_type t = target.value();
             retval = declare_field(object, t, field);
         } else {
@@ -176,12 +177,12 @@ struct decode_env {
                     declare_field(wrapper, t, "");
                 }
                 target.emplace_back(std::move(t));
-            } 
+            }
             if (array.empty()) return false;
         } else {
             QJsonArray array;
             for (auto &it : target) {
-                QJsonObject dst; 
+                QJsonObject dst;
                 {
                     JSONObject wrapper(dst, this->dir);
                     declare_field(wrapper, it, "");
@@ -262,16 +263,16 @@ bool decode_env::declare_field(JSONObject &object, ResponseMessage &target, cons
 
 MESSAGE_CLASS(ResponseMessage) {
     MAKE_DECODEABLE;
-    
+
     // Ctor which takes ownership of the result
     ResponseMessage(ResponseResult *_r) : result(_r), use_result(_r == nullptr), delete_result(_r != nullptr) {}
     // Ctor which does NOT take take ownership of result
-    ResponseMessage(ResponseResult &_r) : result(&_r), use_result(true), delete_result(false) {}    
+    ResponseMessage(ResponseResult &_r) : result(&_r), use_result(true), delete_result(false) {}
     // An incoming message can not directly be mapped to a type - so we store it as JSON
     ResponseMessage(const QJsonObject &obj) : result(nullptr), raw_result(obj), use_result(false), delete_result(false) {}
 
     RequestId id;
-    ResponseResult *result; 
+    ResponseResult *result;
     QJsonObject raw_result;
     OptionalType<ResponseError> error;
 

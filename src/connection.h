@@ -1,14 +1,14 @@
 #pragma once
 
-#include <boost/asio/io_service.hpp>
-#include <boost/asio/ip/tcp.hpp>
-#include <boost/asio/streambuf.hpp>
-
 #include "project.h"
 #include "lsp.h"
 
+#include <QObject>
+
 #include <chrono>
 #include <unordered_map>
+
+class QTcpSocket;
 
 class ConnectionHandler;
 class ResponseMessage;
@@ -16,29 +16,22 @@ class ResponseResult;
 class ResponseError;
 class RequestMessage;
 
-class Connection {
+class Connection : public QObject {
+    Q_OBJECT
 public:
     using request_callback_t = std::function<void(const ResponseMessage &, Connection *conn, project *proj)>;
 
-    Connection(boost::asio::io_service &io_service, ConnectionHandler *handler);
+    Connection(ConnectionHandler *handler, QTcpSocket *client);
 
-    boost::asio::ip::tcp::socket &socket() {
-        return this->_socket;
-    }
-
-    void handle();
-
-    bool is_done() const {
-        return this->running && !this->_socket.is_open();
-    }
-
+    virtual ~Connection() {};
+public:
     static void default_reporting_message_handler(const ResponseMessage &, Connection *, project *);
 
-    // Indicating
+    // Indicating that "result" should be ignored, but "error" should be printed
     static void no_reponse_expected(const ResponseMessage &, Connection *, project *);
 
-
-    void send(RequestMessage &message, 
+public:
+    void send(RequestMessage &message,
             const std::string &method,
             const RequestId &id,
             request_callback_t = &Connection::default_reporting_message_handler);
@@ -55,15 +48,35 @@ public:
     void clean_pending_messages(const std::chrono::system_clock::duration &max_age);
     void handle_pending_response(const ResponseMessage &msg);
 
+    void close();
+    bool is_done();
 
     project active_project;
-protected:
-    void send(const boost::asio::streambuf &buffer);
 
-    bool running = false;
-    boost::asio::io_service &io_service;
-    boost::asio::ip::tcp::socket _socket;
+private slots:
+    void onReadyRead();
+
+private:
+    enum class PACKET_EXPECT {
+        HEADER,
+        BODY,
+    } packet_state = PACKET_EXPECT::HEADER;
+    QByteArray pending_data;
+
+    struct connection_header {
+        size_t content_length = 0;
+    } header;
+
+    void read_header();
+    void read_body();
+
+protected:
     ConnectionHandler *handler;
+    QTcpSocket *socket;
+
+protected:
+    virtual void send(const QByteArray &buffer);
+
 
     struct pending_message {
         pending_message(const request_callback_t &callback) :

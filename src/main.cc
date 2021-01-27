@@ -1,7 +1,12 @@
 #include "connection_handler.h"
 
-int main() {
-    ConnectionHandler handler;
+#include <QThread>
+#include <QApplication>
 
-    handler.run();
+int main(int argc, char **argv) {
+    QApplication app (argc, argv);
+
+    ConnectionHandler handler(&app);
+
+    app.exec();
 }

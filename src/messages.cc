@@ -28,7 +28,7 @@ void ExitRequest::process(Connection *conn, project *proj, const RequestId &id) 
     UNUSED(proj);
     UNUSED(id);
     // TODO do i need a shutdown response?
-    conn->socket().close();
+    conn->close();
 }
 
 
@@ -64,14 +64,14 @@ void TextDocumentHover::process(Connection *conn, project *proj, const RequestId
     conn->send(hover, id);
 
     // TODO change implement properly
-    
+
     ShowDocumentParams showdoc;
     showdoc.uri = DocumentUri::fromPath("/tmp/test");
     showdoc.external = false;
     showdoc.takeFocus = true;
     showdoc.selection = lsRange();
-    showdoc.selection->start.line = 5; 
-    showdoc.selection->start.character = 5; 
+    showdoc.selection->start.line = 5;
+    showdoc.selection->start.character = 5;
     showdoc.selection->end = showdoc.selection->start;
     std::cout << "sending ShowDocument message\n";
     conn->send(showdoc, "window/showDocument", {}, &Connection::no_reponse_expected);
@@ -86,5 +86,5 @@ void TextDocumentHover::process(Connection *conn, project *proj, const RequestId
 
 void OpenSCADRender::process(Connection *conn, project *proj, const RequestId &id) {
     UNUSED(proj);
-    std::cout << "Starting rendering\n";    
+    std::cout << "Starting rendering\n";
 }

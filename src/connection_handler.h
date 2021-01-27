@@ -9,35 +9,40 @@
 #include <string>
 #include <cstdint>
 
-// Forward declare Connection in order to speed up compile times (no need to include boost)
+#include <QObject>
+#include <QTcpServer>
+#include <QList>
+#include <QTcpSocket>
+
+// Forward declare Connection in order to speed up compile times
 class Connection;
 
-class ConnectionHandler {
+class ConnectionHandler : public QObject {
+	Q_OBJECT
     /** This is the listener class which creates threads with Connections* running */
     friend class Connection;
 public:
-    ConnectionHandler(uint16_t port=23725); // 0x5CAD = 23725
+    ConnectionHandler(QObject *parent, uint16_t port=23725); // 0x5CAD = 23725
     virtual ~ConnectionHandler();
 
-    /**
-    * Execute the Connection handler, accepting connections on the given port.
-    * 
-    * Will block the calling thread. This thread will also be used for the message execution.
-    * If any Qt-interaction is to be made, this should be started in a QThread.
-    */
-    void run();
+private slots:
+	// Networking magic
+    void onNewConnection();
+    void onSocketStateChanged(QAbstractSocket::SocketState socketState);
 
 private:
     // Implemented in decoding.cc - needed for scoping of the decoding template magic.
     void register_messages();
     // Implemented in decoding.cc - needed for scoping of the decoding template magic.
-    void handle_message(std::istream &msg, size_t size, Connection *);
+    void handle_message(const QByteArray &, Connection *);
 
-    uint16_t port;
-
-    // Since the message handling is single threaded
+private:
+	// Since the message handling is single threaded
     RequestId active_id;
     std::unordered_map<std::string, std::function<std::unique_ptr<RequestMessage>(decode_env &)>> typemap;
 
     bool running = true;
+
+	QTcpServer server;
+    std::list<std::unique_ptr<Connection>> connections;
 };

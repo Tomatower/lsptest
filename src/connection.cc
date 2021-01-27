@@ -2,12 +2,7 @@
 #include "connection_handler.h"
 #include "messages.h"
 
-#include <boost/asio/io_service.hpp>
-#include <boost/asio/ip/tcp.hpp>
-#include <boost/asio/spawn.hpp>
-#include <boost/asio/streambuf.hpp>
-#include <boost/asio/read_until.hpp>
-#include <boost/asio/read.hpp>
+#include <QTcpSocket>
 
 #include <iostream>
 #include <list>
@@ -16,88 +11,30 @@
 
 #define DEBUG_MESSAGETRAFFIC
 
-ConnectionHandler::ConnectionHandler(uint16_t port) :
-port(port)
+Connection::Connection(ConnectionHandler *handler, QTcpSocket *client) :
+        handler(handler),
+        socket(client)
 {
-    register_messages();
-}
+   connect(socket, SIGNAL(readyRead()), this, SLOT(onReadyRead()));
 
-// Has to be explicit, for std::unque_ptr with forward declarations
-ConnectionHandler::~ConnectionHandler() {}
+    // start a qtimer every 10 seconds to run:
+    //this->clean_pending_messages(std::chrono::seconds(10));
 
-void ConnectionHandler::run() {
-    boost::asio::io_service io_service;
-
-    std::cout << "Using port " << this->port << "\n";
-
-    boost::asio::ip::tcp::endpoint tcp_endpoint{boost::asio::ip::tcp::v4(), this->port};
-    boost::asio::ip::tcp::acceptor tcp_acceptor{io_service, tcp_endpoint};
-
-    tcp_acceptor.listen();
-    std::list<std::unique_ptr<Connection>> connections;
-
-    std::function<void(const boost::system::error_code&)> accept_connection;
-    accept_connection = [&](const boost::system::error_code&) {
-        if (!this->running) return;
-
-        connections.remove_if([](const std::unique_ptr<Connection> &c) {
-            return c->is_done();
-        });
-
-        /*auto conn = */
-        connections.emplace_back(std::make_unique<Connection>(io_service, this));
-        auto &conn = connections.back(); // Until C++17 support
-        //auto conn = new Connection(io_service, this);
-
-        tcp_acceptor.async_accept(conn->socket(), tcp_endpoint, [&] (const boost::system::error_code& ec) {
-            if (ec) {
-                std::cout << "Handle Connection error: " << ec.message() << "\n";
-                return;
-            }
-            std::cout << "Connection received from " << tcp_endpoint.address() << ":" << tcp_endpoint.port() << "\n";
-            conn->handle();
-            accept_connection({});
-        });
-    };
-
-    accept_connection({});
-
-    io_service.run();
-    std::cout << "Done, Bye\n";
 }
 
 
-Connection::Connection(boost::asio::io_service &io_service, ConnectionHandler *handler) :
-        io_service(io_service),
-        _socket(io_service),
-        handler(handler)
-{
-}
-
-
-static bool strip_empty(const std::string &str) {
-    for (unsigned char c : str) {
-        if (c != 0 && !std::isspace(c)) return false;
+static bool is_strip_empty(const QByteArray &data) {
+    for(const auto &b : data) {
+        if (!std::isspace(b)) {
+            return false;
+        }
     }
     return true;
 }
 
-static std::pair<std::string, std::string> read_header_line(boost::asio::ip::tcp::socket &socket, boost::asio::streambuf  &streambuffer) {
-    if (!socket.is_open()) {
-        return {"", "closed"};
-    }
-
-    // might throw boost::system_error, has to be handled outside
-    size_t cnt = boost::asio::read_until(socket, streambuffer, "\r\n");
-    std::string str(cnt + 1, '\0');
-    std::istream datastream(&streambuffer);
-    datastream.read(&str[0], cnt);
-
-    if (strip_empty(str)) {
-        return {"", ""};
-    }
-
-    // Separate the header
+static std::pair<std::string, std::string> read_header_line(QByteArray &data) {
+    std::string str = data.data();
+     // Separate the header
     size_t sep_pos = str.find(": ");
     if (sep_pos == std::string::npos) {
         return {"", "no sep"};
@@ -108,102 +45,68 @@ static std::pair<std::string, std::string> read_header_line(boost::asio::ip::tcp
     return {str.substr(0, sep_pos), str.substr(sep_pos + 2, end_pos)};
 }
 
-struct connection_header {
-    size_t content_length = 0;
-};
+void Connection::read_header() {
+    while (this->socket->canReadLine()) {
+        pending_data = this->socket->readLine();
+        if(is_strip_empty(pending_data)) {
+            this->packet_state = PACKET_EXPECT::BODY;
+            return;
+        }
 
-static connection_header read_header(boost::asio::ip::tcp::socket &socket, boost::asio::streambuf  &streambuffer) {
-    std::pair<std::string, std::string> field;
-    connection_header header;
-    do {
-        try {
-            field = read_header_line(socket, streambuffer);
-        }
-        catch(const boost::system::system_error &err) {
-            if (err.code() == boost::asio::error::eof) {
-                // EOF is ok.
-                break;
-            }
-            std::cerr << "Could not read header: socket error " << err.code() << ":" << err.what() << "\n";
-            break;
-        }
+        auto field = read_header_line(pending_data);
 
         // EXTEND: List Accepted header options here
-        if (field.first.empty() && field.second.empty()) {
-            break;
-
-        } else if (field.first.empty() && !field.second.empty()) {
-            std::cout << "Something is strange " << field.second << "\n";
-
-        } else if (field.first == "Content-Length") {
+        if (field.first == "Content-Length") {
             size_t l = std::atoi(field.second.c_str());
             //if (l < 1024 * 1024 * 5)  { // TODO: Try to trust a remote network connection?!?!
             if (l > 0) {
-                header.content_length = l;
+                this->header.content_length = l;
             }
         } else if (field.first == "Content-Type") {
             if (field.second != "application/vscode-jsonrpc; charset=utf-8") {
                 std::cerr << "unexpected content type " << field.second << "\n";
             }
-
         } else {
             std::cerr << "Unknown header field " << field.first << "\n";
         }
-    } while (!field.first.empty());
-
-    return header;
+    }
 }
 
-void Connection::handle() {
-    this->running = true;
+void Connection::read_body() {
+    if (header.content_length == 0) {
+        std::cerr << "No Content-Length given\n";
+        packet_state = PACKET_EXPECT::HEADER;
+        return;
+    }
 
-    boost::asio::spawn(io_service, [&](boost::asio::yield_context ) {
-        // 512K is a nice buffer i think - maybe we have to think about not having it on the stack...
-        //const int data_max_size = 1024 * 512;
-        //char buffer[data_max_size];
-        boost::asio::streambuf streambuffer;
-
-        while (this->_socket.is_open()) {
-            connection_header header = read_header(this->_socket, streambuffer);
-            if (header.content_length == 0) {
-                std::cerr << "No Content-Length given\n";
-                header.content_length = 1024;
-            }
-
-            size_t cnt = streambuffer.size();
-            streambuffer.prepare(header.content_length);
-            try {
-                while(cnt < header.content_length) {
-                    cnt += boost::asio::read(this->_socket, streambuffer,
-                                boost::asio::transfer_at_least(header.content_length - cnt));
-                }
-            }
-            catch(const boost::system::system_error &err) {
-                if (err.code() == boost::asio::error::eof) {
-                    // EOF is ok.
-                    break;
-                }
-                std::cerr << "Could not read json data: socket error " << err.code() << ":" << err.what() << "\n";
-                break;
-            }
-
+    pending_data = this->socket->read(this->header.content_length);
 #ifdef DEBUG_MESSAGETRAFFIC
-            std::cout << "RECEIVED: [" << cnt << "]: " << std::string(boost::asio::buffers_begin(streambuffer.data()), boost::asio::buffers_begin(streambuffer.data()) + streambuffer.size());
-            std::cout << "\n";
+    std::cout << "RECEIVED: [" << pending_data.size() << "]: " << pending_data.data() << "\n";
+    std::cout << "\n";
 #endif
-            std::istream jsonstream(&streambuffer);
-            // Now we should have the full json blob in the json stream
-            this->handler->handle_message(jsonstream, cnt, this);
 
-            // And for good measure clear up pending messages
-            this->clean_pending_messages(std::chrono::seconds(10));
-        }
-        this->_socket.shutdown(this->_socket.shutdown_both);
-        this->_socket.close();
-        std::cout << "Done with the socket\n";
-        //delete this;
-    });
+    this->handler->handle_message(pending_data, this);
+
+    // Reset to receive header
+    packet_state = PACKET_EXPECT::HEADER;
+    pending_data.clear();
+    this->header = connection_header();
 }
+
+void Connection::onReadyRead() {
+    QTcpSocket* sender = static_cast<QTcpSocket*>(QObject::sender());
+    assert(sender == this->socket);
+
+    switch(packet_state) {
+    case PACKET_EXPECT::HEADER:
+        this->read_header();
+        break;
+    case PACKET_EXPECT::BODY:
+        this->read_body();
+        break;
+    }
+}
+
 
 void Connection::clean_pending_messages(const std::chrono::system_clock::duration &max_age) {
     auto now = std::chrono::system_clock::now();
@@ -251,23 +154,30 @@ void Connection::handle_pending_response(const ResponseMessage &msg) {
     }
 }
 
-void Connection::send(const boost::asio::streambuf &streambuffer) {
+void Connection::close() {
+    this->socket->close();
+    assert(!this->socket->isOpen());
+}
+
+bool Connection::is_done() {
+    return !this->socket->isOpen();
+}
+
+void Connection::send(const QByteArray &data) {
     // Send headers
     {
-        boost::asio::streambuf headerbuf;
-        headerbuf.prepare(32); // Optimistic, size will be ~19 - 25, depending in integer length
-        std::ostream headerstream(&headerbuf);
-        headerstream << "Content-Length: " << streambuffer.size() << "\r\n";
-        headerstream << "\r\n";
-        headerstream.flush();
-        this->_socket.send(headerbuf.data());
+        QByteArray headerbuf;
+        headerbuf.append("Content-Length: ")
+            .append(QString::number(data.size()).toUtf8())
+            .append("\r\n\r\n");
+        this->socket->write(headerbuf);
     }
 
     // Send payload
-    size_t cnt_send = this->_socket.send(streambuffer.data());
+    size_t cnt_send = this->socket->write(data);
 #ifdef DEBUG_MESSAGETRAFFIC
-    std::cout << "SENDING: [" << cnt_send << "]: " 
-        << std::string(boost::asio::buffers_begin(streambuffer.data()), boost::asio::buffers_begin(streambuffer.data()) + streambuffer.size());
+    std::cout << "SENDING: [" << cnt_send << "]: "
+        << data.data();
     std::cout << "\n";
 #else
     (void)cnt_send;
@@ -275,24 +185,17 @@ void Connection::send(const boost::asio::streambuf &streambuffer) {
 }
 
 void Connection::send(ResponseMessage &msg, const RequestId &id) {
-    // Prepare payload
-    boost::asio::streambuf streambuffer;
-    std::ostream responsestream(&streambuffer);
-
     if (!msg.id.is_set())
         msg.id = id;
 
-    decode_env env(responsestream);
-    env.store(responsestream, msg);
+    QByteArray responsebuffer;
+    decode_env env(storage_direction::WRITE);
+    env.store(&responsebuffer, msg);
 
-    this->send(streambuffer);
+    this->send(responsebuffer);
 }
 
 void Connection::send(RequestMessage &msg, const std::string &method, const RequestId &id, request_callback_t callback) {
-    // Prepare payload
-    boost::asio::streambuf streambuffer;
-    std::ostream responsestream(&streambuffer);
-
     if (!msg.id.is_set()) {
         msg.id = id;
     }
@@ -308,10 +211,11 @@ void Connection::send(RequestMessage &msg, const std::string &method, const Requ
 
     pending_messages.emplace(std::make_pair(msg.id.value_int, pending_message(callback)));
 
-    decode_env env(responsestream);
-    env.store(responsestream, msg);
+    QByteArray responsebuffer;
+    decode_env env(storage_direction::WRITE);
+    env.store(&responsebuffer, msg);
 
-    this->send(streambuffer);
+    this->send(responsebuffer);
 }
 
 

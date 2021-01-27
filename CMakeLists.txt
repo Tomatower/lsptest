@@ -40,8 +40,8 @@ target_link_libraries(lsptest ${Boost_LIBRARIES})
 
 
 # Find Qt
-find_package(Qt5 COMPONENTS Core REQUIRED)
-target_link_libraries(lsptest Qt::Core)
+find_package(Qt5 COMPONENTS Core Network Widgets REQUIRED)
+target_link_libraries(lsptest Qt::Core Qt::Network Qt::Widgets)
 
 
 # Install
@@ -50,6 +50,10 @@ install(TARGETS lsptest RUNTIME DESTINATION bin)
 # Compile
 target_include_directories(lsptest PRIVATE src)
 
+qt_generate_moc(src/connection.h connection.moc.cc TARGET lsptest)
+qt_generate_moc(src/connection_handler.h connection_handler.moc.cc TARGET lsptest)
+
+
 target_sources(lsptest PRIVATE
 	src/main.cc
 	src/messages.cc
@@ -57,7 +61,11 @@ target_sources(lsptest PRIVATE
     src/connection_handler.cc
     src/decoding.cc
     src/lsp.cc
+    connection.moc.cc
+    connection_handler.moc.cc
 )
+
+
 
 #find_program(iwyu_path NAMES include-what-you-use iwyu)
 #if(iwyu_path)
